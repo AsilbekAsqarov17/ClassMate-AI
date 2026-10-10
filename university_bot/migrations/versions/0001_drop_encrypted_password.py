@@ -36,14 +36,17 @@ def upgrade() -> None:
             sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
         )
 
-    # 2. Create eclass_accounts table if it doesn't exist, otherwise drop legacy column safely
+    # 2. Create eclass_accounts table with all required model columns if it doesn't exist
     if "eclass_accounts" not in tables:
         op.create_table(
             "eclass_accounts",
             sa.Column("id", sa.Integer(), primary_key=True, autoincrement=True),
             sa.Column("user_id", sa.BigInteger(), nullable=False),
+            sa.Column("username", sa.String(length=255), nullable=True),
             sa.Column("session_data", sa.Text(), nullable=True),
+            sa.Column("last_sync", sa.DateTime(timezone=True), nullable=True),
             sa.Column("is_active", sa.Boolean(), server_default=sa.true(), nullable=False),
+            sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
         )
     else:
         columns = [col["name"] for col in inspector.get_columns("eclass_accounts")]
