@@ -1,9 +1,4 @@
-"""One-time password design: drop eclass_accounts.encrypted_password.
-
-The E-Class password is used once at login and never persisted. Only the
-authenticated session (encrypted cookies in session_data) is stored.
-Existing rows keep their session_data; the password column is dropped
-without being read, copied, or logged.
+"""Create base tables (users, eclass_accounts) and apply initial password design.
 
 Revision ID: 0001
 Revises:
@@ -25,8 +20,17 @@ def upgrade() -> None:
     inspector = Inspector.from_engine(conn)
     tables = inspector.get_table_names()
 
+    # 1. Create users table if it doesn't exist
+    if "users" not in tables:
+        op.create_table(
+            "users",
+            sa.Column("id", sa.BigInteger(), primary_key=True, autoincrement=False),
+            sa.Column("daily_timetable_notifications", sa.Boolean(), server_default=sa.true(), nullable=False),
+            sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        )
+
+    # 2. Create eclass_accounts table if it doesn't exist, otherwise drop legacy column safely
     if "eclass_accounts" not in tables:
-        # Fresh database: create the table without encrypted_password
         op.create_table(
             "eclass_accounts",
             sa.Column("id", sa.Integer(), primary_key=True, autoincrement=True),
@@ -34,7 +38,6 @@ def upgrade() -> None:
             sa.Column("session_data", sa.Text(), nullable=True),
         )
     else:
-        # Existing database: drop the legacy column if it exists
         columns = [col["name"] for col in inspector.get_columns("eclass_accounts")]
         if "encrypted_password" in columns:
             op.drop_column("eclass_accounts", "encrypted_password")
@@ -43,9 +46,12 @@ def upgrade() -> None:
 def downgrade() -> None:
     conn = op.get_bind()
     inspector = Inspector.from_engine(conn)
-    columns = [col["name"] for col in inspector.get_columns("eclass_accounts")]
-    if "encrypted_password" not in columns:
-        op.add_column(
-            "eclass_accounts",
-            sa.Column("encrypted_password", sa.Text(), nullable=True),
-        )
+    tables = inspector.get_table_names()
+    
+    if "eclass_accounts" in tables:
+        columns = [col["name"] for col in inspector.get_columns("eclass_accounts")]
+        if "encrypted_password" not in columns:
+            op.add_column(
+                "eclass_accounts",
+                sa.Column("encrypted_password", sa.Text(), nullable=True),
+            )
