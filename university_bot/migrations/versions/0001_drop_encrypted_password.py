@@ -24,8 +24,8 @@ def upgrade() -> None:
     if "users" not in tables:
         op.create_table(
             "users",
-            sa.Column("id", sa.BigInteger(), primary_key=True, autoincrement=False),
-            sa.Column("telegram_id", sa.BigInteger(), nullable=True),
+            sa.Column("id", sa.Integer(), primary_key=True, autoincrement=True),
+            sa.Column("telegram_id", sa.BigInteger(), nullable=False, unique=True),
             sa.Column("username", sa.String(length=255), nullable=True),
             sa.Column("timezone", sa.String(length=64), server_default="Asia/Tashkent", nullable=False),
             sa.Column("group_id", sa.String(length=64), nullable=True),
