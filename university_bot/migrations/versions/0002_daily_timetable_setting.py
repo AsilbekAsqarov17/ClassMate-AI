@@ -15,15 +15,8 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.add_column(
-        "users",
-        sa.Column(
-            "daily_timetable_notifications",
-            sa.Boolean(),
-            nullable=False,
-            server_default=sa.true(),
-        ),
-    )
+    # Column is already created in migration 0001, so pass here
+    pass
 
 
 def downgrade() -> None:
