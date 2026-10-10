@@ -20,12 +20,19 @@ def upgrade() -> None:
     inspector = Inspector.from_engine(conn)
     tables = inspector.get_table_names()
 
-    # 1. Create users table if it doesn't exist
+    # 1. Create users table with all required model columns if it doesn't exist
     if "users" not in tables:
         op.create_table(
             "users",
             sa.Column("id", sa.BigInteger(), primary_key=True, autoincrement=False),
+            sa.Column("telegram_id", sa.BigInteger(), nullable=True),
+            sa.Column("username", sa.String(length=255), nullable=True),
+            sa.Column("timezone", sa.String(length=64), server_default="Asia/Tashkent", nullable=False),
+            sa.Column("group_id", sa.String(length=64), nullable=True),
+            sa.Column("class_notifications", sa.Boolean(), server_default=sa.true(), nullable=False),
+            sa.Column("deadline_notifications", sa.Boolean(), server_default=sa.true(), nullable=False),
             sa.Column("daily_timetable_notifications", sa.Boolean(), server_default=sa.true(), nullable=False),
+            sa.Column("reminder_minutes", sa.Integer(), server_default="15", nullable=False),
             sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
         )
 
@@ -36,12 +43,12 @@ def upgrade() -> None:
             sa.Column("id", sa.Integer(), primary_key=True, autoincrement=True),
             sa.Column("user_id", sa.BigInteger(), nullable=False),
             sa.Column("session_data", sa.Text(), nullable=True),
+            sa.Column("is_active", sa.Boolean(), server_default=sa.true(), nullable=False),
         )
     else:
         columns = [col["name"] for col in inspector.get_columns("eclass_accounts")]
         if "encrypted_password" in columns:
             op.drop_column("eclass_accounts", "encrypted_password")
-
 
 def downgrade() -> None:
     conn = op.get_bind()
