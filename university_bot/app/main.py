@@ -6,7 +6,7 @@ import logging
 from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
 
-from app.bot.handlers import academic, schedule, start
+from app.bot.handlers import academic, attendance, schedule, start
 from app.bot.handlers import settings as settings_handler
 from app.config.settings import get_settings
 from app.database.database import create_tables, dispose_engine
@@ -27,6 +27,7 @@ async def main() -> None:
     dp.include_router(start.router)
     dp.include_router(schedule.router)
     dp.include_router(academic.router)
+    dp.include_router(attendance.router)
     dp.include_router(settings_handler.router)
 
     await bot.delete_webhook(drop_pending_updates=True)

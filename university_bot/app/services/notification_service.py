@@ -10,8 +10,31 @@ from app.database.models.lesson import Lesson
 from app.database.models.notification import NotificationRecord
 from app.database.models.user import User
 
-DEADLINE_REMINDER_HOURS = [48, 1]
+"""Deadline reminder thresholds, in hours before the deadline.
+
+Exactly two reminders fire per item: 4 hours and 1 hour. Each threshold has
+its own `kind` (deadline_4h / deadline_1h), which is half of the dedup
+identity in NotificationRecord, so both reminders are delivered exactly once
+for the same item and a restart never resends either.
+"""
+# Deadline reminder thresholds, in hours before the deadline.
+#
+# Exactly two reminders fire per item: 4 hours and 1 hour. Each threshold has
+# its own `kind` (deadline_4h / deadline_1h), which is half of the dedup
+# identity in NotificationRecord, so both reminders are delivered exactly once
+# for the same item and a restart never resends either.
+DEADLINE_REMINDER_HOURS = [4, 1]
+
+# The scheduler polls once a minute, so an exact-instant match would miss
+# anything that lands between two ticks. REMINDER_GRACE widens each window to
+# absorb tick jitter.
 REMINDER_GRACE = timedelta(minutes=5)
+
+# An item discovered after its 4h instant has already passed (e.g. a first
+# sync that ran late) must not produce a stream of overdue reminders. Past
+# thresholds are skipped once they fall outside the grace window; a reminder
+# still inside the grace window is honoured, because it is genuinely due.
+DEADLINE_REMINDER_MAX_LAG = timedelta(minutes=10)
 
 
 def _aware(dt: datetime) -> datetime:
@@ -34,6 +57,18 @@ async def _already_sent(session: AsyncSession, user_id: int, kind: str, ref_id: 
 async def _mark_sent(session: AsyncSession, user_id: int, kind: str, ref_id: str) -> None:
     session.add(NotificationRecord(user_id=user_id, kind=kind, ref_id=ref_id, sent_at=datetime.now(__import__("datetime").timezone.utc)))
     await session.commit()
+
+
+WEEKLY_ATTENDANCE_KIND = "weekly_attendance"
+
+
+async def due_weekly_attendance(session: AsyncSession, user_id: int, week_ref: str) -> bool:
+    """True (once) per user + report week. Mirrors the reminder dedup pattern."""
+    return not await _already_sent(session, user_id, WEEKLY_ATTENDANCE_KIND, week_ref)
+
+
+async def mark_weekly_attendance_sent(session: AsyncSession, user_id: int, week_ref: str) -> None:
+    await _mark_sent(session, user_id, WEEKLY_ATTENDANCE_KIND, week_ref)
 
 
 async def due_class_reminders(session: AsyncSession, user: User, now: datetime) -> list[tuple[Lesson, str]]:
@@ -97,7 +132,18 @@ async def due_daily_timetable(session: AsyncSession, user: User, now: datetime) 
 
 
 async def send_score_notifications(session: AsyncSession, bot, user: User, items: list[Assignment]) -> None:
-    """Deliver NEW SCORE messages; delete the item only after a successful send."""
+    """Deliver NEW SCORE messages; delete the item only after a successful send.
+
+    Ordering is deliberate and load-bearing: the deduplication record is
+    written ONLY after Telegram has accepted the message. If the send raises,
+    nothing is recorded and the row is kept, so the next sync retries it.
+
+    Known limitation (documented, not worked around): if Telegram accepts the
+    message but the process dies before the commit below, the retry can
+    duplicate that one message. Duplicating a score alert is preferable to
+    silently dropping a grade, and the window is only the commit between two
+    items.
+    """
     async def mark(kind: str, ref_id: str) -> None:
         session.add(NotificationRecord(user_id=user.id, kind=kind, ref_id=ref_id, sent_at=datetime.now(__import__("datetime").timezone.utc)))
 
@@ -113,7 +159,11 @@ async def send_score_notifications(session: AsyncSession, bot, user: User, items
             await bot.send_message(user.telegram_id, msg)
         except Exception:
             continue  # keep the academic item for the next sync retry
-        await mark("score", str(row.external_id))
+        # mark AFTER the send succeeded, keyed by external_id#score so a
+        # corrected grade is not mistaken for an already-delivered one.
+        from app.services.academic_sync import score_ref
+
+        await mark("score", score_ref(row.external_id, row.score))
         await session.delete(row)
     await session.commit()
 
@@ -139,11 +189,15 @@ async def due_deadline_reminders(session: AsyncSession, user: User, now: datetim
             continue  # quiz has not opened yet: no reminders until available
         deadline = _aware(a.deadline)
         for interval in DEADLINE_REMINDER_HOURS:
-            kind = f"deadline_{interval}h"
+            kind = f"deadline_{interval}h"   # stable per-threshold dedup identity
             scheduled = deadline - timedelta(hours=interval)
-            # fire only near the scheduled instant (± grace); never in the past
-            if scheduled <= now <= scheduled + REMINDER_GRACE:
-                if not await _already_sent(session, user.id, kind, str(a.id)):
-                    out.append((a, kind))
-                    await _mark_sent(session, user.id, kind, str(a.id))
+            # Due inside the grace window, or slightly late inside the lag
+            # window. Beyond that the reminder is stale and is dropped rather
+            # than sent as an overdue notification.
+            if not (scheduled <= now <= scheduled + REMINDER_GRACE + DEADLINE_REMINDER_MAX_LAG):
+                continue
+            if await _already_sent(session, user.id, kind, str(a.id)):
+                continue   # already delivered: restart must not resend
+            out.append((a, kind))
+            await _mark_sent(session, user.id, kind, str(a.id))
     return out

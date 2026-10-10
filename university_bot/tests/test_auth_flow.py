@@ -17,10 +17,12 @@ from sqlalchemy.pool import StaticPool
 
 import app.bot.handlers.settings as settings_mod
 import app.bot.handlers.start as start_mod
+from app.bot.handlers.settings import SettingsStates
 from app.bot.states.login import LoginStates
 from app.database.models.base import Base
 from app.database.models.eclass_account import EClassAccount
 from app.database.models.user import User
+from app.database.models.allowed_student_id import AllowedStudentID
 from app.eclass.client import EClassAuthError
 from app.eclass.web_client import EClassWebClient
 from app.services.validation import normalize_student_id
@@ -206,6 +208,13 @@ async def _factory():
     return engine, async_sessionmaker(engine, expire_on_commit=False)
 
 
+async def _seed_allowed(factory, student_ids) -> None:
+    async with factory() as s:
+        for sid in student_ids:
+            s.add(AllowedStudentID(student_id=sid.lower()))
+        await s.commit()
+
+
 @pytest.mark.asyncio
 async def test_invalid_student_id_rejected_before_login(monkeypatch):
     engine, factory = await _factory()
@@ -234,6 +243,7 @@ async def test_valid_student_id_normalized_and_advanced(monkeypatch):
 
     state = FakeState()
     msg = FakeMessage("U2410037")
+    await _seed_allowed(factory, ["u2410037"])
     await start_mod.got_student_id(msg, state)
 
     assert state.state == LoginStates.waiting_password
@@ -369,6 +379,8 @@ async def test_change_student_id_requires_one_time_password(monkeypatch):
     client = FakeEClassClient()
     monkeypatch.setattr(settings_mod, "EClassWebClient", lambda: client)
 
+    await _seed_allowed(factory, ["u2499999"])
+
     async with factory() as s:
         u = User(telegram_id=555, username="flowtest", timezone="Asia/Tashkent")
         s.add(u)
@@ -398,4 +410,133 @@ async def test_change_student_id_requires_one_time_password(monkeypatch):
         assert acc.username == "u2499999"
         assert acc.session_data == "encrypted-session-blob"
         assert not hasattr(acc, "encrypted_password")
+    await engine.dispose()
+
+
+# ---------------- allowed Student ID whitelist ----------------
+
+
+@pytest.mark.asyncio
+async def test_allowed_id_accepted_lowercase(monkeypatch):
+    engine, factory = await _factory()
+    monkeypatch.setattr(start_mod, "get_session_factory", lambda: factory)
+    await _seed_allowed(factory, ["u2410037"])
+
+    state = FakeState()
+    msg = FakeMessage("u2410037")
+    await start_mod.got_student_id(msg, state)
+
+    assert state.state == LoginStates.waiting_password
+    assert state.data["student_id"] == "u2410037"
+    assert "password" in msg.answers[-1].text.lower()
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_allowed_id_accepted_uppercase_normalized(monkeypatch):
+    engine, factory = await _factory()
+    monkeypatch.setattr(start_mod, "get_session_factory", lambda: factory)
+    await _seed_allowed(factory, ["u2410037"])
+
+    state = FakeState()
+    msg = FakeMessage("U2410037")
+    await start_mod.got_student_id(msg, state)
+
+    assert state.state == LoginStates.waiting_password
+    assert state.data["student_id"] == "u2410037"
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_unknown_id_rejected_with_ask_asqarbek(monkeypatch):
+    engine, factory = await _factory()
+    monkeypatch.setattr(start_mod, "get_session_factory", lambda: factory)
+    client = FakeEClassClient()
+    monkeypatch.setattr(start_mod, "EClassWebClient", lambda: client)
+    await _seed_allowed(factory, ["u2410037"])
+
+    state = FakeState()
+    await state.set_state(LoginStates.waiting_student_id)
+    msg = FakeMessage("u2410099")  # valid format, not whitelisted
+    await start_mod.got_student_id(msg, state)
+
+    assert state.state == LoginStates.waiting_student_id  # did NOT advance
+    assert "student_id" not in state.data
+    assert "Asqarbek" in msg.answers[-1].text
+    assert "not registered" in msg.answers[-1].text
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_unauthorized_id_never_reaches_password_stage(monkeypatch):
+    """An unknown Student ID must NOT trigger E-Class login/password flow."""
+    engine, factory = await _factory()
+    monkeypatch.setattr(start_mod, "get_session_factory", lambda: factory)
+    client = FakeEClassClient()
+    monkeypatch.setattr(start_mod, "EClassWebClient", lambda: client)
+    await _seed_allowed(factory, ["u2410037"])
+
+    state = FakeState()
+    await state.set_state(LoginStates.waiting_student_id)
+    msg = FakeMessage("u2410099")
+    await start_mod.got_student_id(msg, state)
+
+    assert state.state == LoginStates.waiting_student_id
+    assert state.data == {}
+    assert client.logins == []  # no E-Class login was attempted
+    assert "Now enter your E-Class password" not in msg.answers[-1].text
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_settings_rejects_id_not_in_allowed_table(monkeypatch):
+    engine, factory = await _factory()
+    monkeypatch.setattr(settings_mod, "get_session_factory", lambda: factory)
+
+    def _boom():
+        raise AssertionError("E-Class login must not be attempted for disallowed ID")
+
+    monkeypatch.setattr(settings_mod, "EClassWebClient", _boom)
+    await _seed_allowed(factory, ["u2410037"])
+
+    async with factory() as s:
+        u = User(telegram_id=555, username="flowtest", timezone="Asia/Tashkent")
+        s.add(u)
+        await s.flush()
+        s.add(EClassAccount(user_id=u.id, username="u2410037", session_data="sess"))
+        await s.commit()
+
+    state = FakeState()
+    msg = FakeMessage("U2499999")  # valid format, not whitelisted
+    await settings_mod.got_new_student_id(msg, state)
+
+    assert "Asqarbek" in msg.answers[-1].text
+    assert "new_student_id" not in state.data
+    assert state.state is None  # never advanced to password state
+    async with factory() as s:
+        acc = (await s.execute(select(EClassAccount))).scalar_one()
+        assert acc.username == "u2410037"  # unchanged
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_settings_accepts_allowed_id_and_asks_password(monkeypatch):
+    engine, factory = await _factory()
+    monkeypatch.setattr(settings_mod, "get_session_factory", lambda: factory)
+    await _seed_allowed(factory, ["u2499999"])
+
+    async with factory() as s:
+        u = User(telegram_id=555, username="flowtest", timezone="Asia/Tashkent")
+        s.add(u)
+        await s.flush()
+        s.add(EClassAccount(user_id=u.id, username="u2410037", session_data="sess"))
+        await s.commit()
+
+    state = FakeState()
+    msg = FakeMessage("U2499999")
+    await settings_mod.got_new_student_id(msg, state)
+
+    assert state.state == SettingsStates.waiting_id_password
+    assert state.data["new_student_id"] == "u2499999"
+    assert "password" in msg.answers[-1].text.lower()
     await engine.dispose()

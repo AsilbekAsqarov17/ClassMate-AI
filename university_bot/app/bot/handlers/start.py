@@ -8,10 +8,15 @@ from app.bot.keyboards.main_menu import main_menu
 from app.bot.states.login import LoginStates
 from app.database.database import get_session_factory
 from app.database.models.eclass_account import EClassAccount
+from app.database.repositories.allowed_student_id_repository import AllowedStudentIDRepository
 from app.database.repositories.user_repository import UserRepository
 from app.eclass.client import EClassAuthError, EClassUnavailableError
 from app.eclass.web_client import EClassWebClient
-from app.services.validation import INVALID_STUDENT_ID_MSG, normalize_student_id
+from app.services.validation import (
+    INVALID_STUDENT_ID_MSG,
+    NOT_ALLOWED_STUDENT_ID_MSG,
+    normalize_student_id,
+)
 
 router = Router()
 
@@ -53,6 +58,12 @@ async def got_student_id(message: Message, state: FSMContext) -> None:
     if student_id is None:
         # stay in waiting_student_id — nothing is stored, user may retry
         await message.answer(INVALID_STUDENT_ID_MSG)
+        return
+    async with get_session_factory()() as session:
+        allowed = await AllowedStudentIDRepository(session).is_allowed(student_id)
+    if not allowed:
+        # stay in waiting_student_id — user may retry with an allowed ID
+        await message.answer(NOT_ALLOWED_STUDENT_ID_MSG)
         return
     await state.update_data(student_id=student_id)
     await state.set_state(LoginStates.waiting_password)
@@ -155,20 +166,39 @@ async def got_group(message: Message, state: FSMContext) -> None:
     await message.answer("🔄 Synchronization will run automatically every 30 minutes. Use 🔄 Sync for an immediate run.")
 
 
+HELP_TEXT = (
+    "🎓 ClassMate AI — university academic assistant\n\n"
+    "Available commands:\n\n"
+    "/start — connect/login your E-Class account\n"
+    "/today — today's lessons\n"
+    "/tomorrow — tomorrow's lessons\n"
+    "/week — weekly timetable\n"
+    "/next — next upcoming lesson\n"
+    "/assignments — current assignments\n"
+    "/quizzes — current quizzes\n"
+    "/deadlines — upcoming deadlines\n"
+    "/scores — score/grade information\n"
+    "/attendance — attendance for your courses\n"
+    "/sync — manually synchronize academic data\n"
+    "/settings — manage account/settings\n"
+    "/help — show this help message\n\n"
+    "🔐 Password security\n"
+    "Your E-Class password is not stored in ClassMate AI. It is used to "
+    "authenticate with E-Class, and your password message is deleted. The bot "
+    "keeps only the encrypted E-Class session needed to access your academic "
+    "data without asking for your password again.\n\n"
+    "🔄 Session\n"
+    "ClassMate AI periodically synchronizes with E-Class to keep the "
+    "authenticated session active. The current full synchronization runs every "
+    "30 minutes. If the E-Class session eventually expires or becomes invalid, "
+    "the bot will notify you and ask you to reconnect.\n\n"
+    "⏰ Deadline reminders\n"
+    "Assignments and quizzes get one reminder 4 hours before the deadline and "
+    "one reminder 1 hour before it. Each reminder is sent only once per item, "
+    "and no reminder is sent for work you have already submitted."
+)
+
+
 @router.message(Command("help"))
 async def cmd_help(message: Message) -> None:
-    await message.answer(
-        "Available commands:\n"
-        "/start — main menu/setup\n"
-        "/help — this message\n"
-        "/today — today's schedule\n"
-        "/tomorrow — tomorrow's schedule\n"
-        "/week — weekly schedule\n"
-        "/next — next upcoming class\n"
-        "/assignments — assignments\n"
-        "/quizzes — quizzes\n"
-        "/deadlines — deadlines\n"
-        "/scores — scores\n"
-        "/sync — synchronize now\n"
-        "/settings — notification settings"
-    )
+    await message.answer(HELP_TEXT)

@@ -122,7 +122,8 @@ async def test_quiz_becomes_visible_after_open_time(db, quser):
 
 @pytest.mark.asyncio
 async def test_no_reminder_for_unopened_quiz(db, quser):
-    deadline = NOW + timedelta(hours=47, minutes=58)  # 48h reminder due right now
+    # 4h reminder is due right now, but the quiz has not opened yet
+    deadline = NOW + timedelta(hours=3, minutes=58)
     db.add(Assignment(
         user_id=quser.id, external_id="q1", course_name="C", title="MCQS-5",
         kind="quiz", deadline=deadline, open_time=NOW + timedelta(hours=24),
@@ -134,7 +135,7 @@ async def test_no_reminder_for_unopened_quiz(db, quser):
 
 @pytest.mark.asyncio
 async def test_reminder_fires_for_opened_quiz(db, quser):
-    deadline = NOW + timedelta(hours=47, minutes=58)
+    deadline = NOW + timedelta(hours=3, minutes=58)   # 4h reminder due now
     db.add(Assignment(
         user_id=quser.id, external_id="q2", course_name="C", title="Quiz 3",
         kind="quiz", deadline=deadline, open_time=NOW - timedelta(hours=1),
@@ -143,6 +144,6 @@ async def test_reminder_fires_for_opened_quiz(db, quser):
     await db.commit()
     reminders = await due_deadline_reminders(db, quser, NOW)
     assert len(reminders) == 1
-    assert reminders[0][1] == "deadline_48h"
+    assert reminders[0][1] == "deadline_4h"
     # and never again
     assert await due_deadline_reminders(db, quser, NOW) == []

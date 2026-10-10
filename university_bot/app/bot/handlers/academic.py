@@ -173,6 +173,7 @@ async def cmd_sync(message: Message) -> None:
         lines.append("✅ Timetable updated" if outcome.timetable_ok else "⚠️ Timetable failed")
         lines.append("✅ Assignments updated" if outcome.assignments_ok else "⚠️ Assignments failed")
         lines.append("✅ Quizzes updated" if outcome.quizzes_ok else "⚠️ Quizzes failed")
+        lines.append("✅ Attendance updated" if outcome.attendance_ok else "⚠️ Attendance failed")
         if outcome.error:
             lines.append(f"\n⚠️ Details: {outcome.error}\nYour previously synchronized data is still available.")
         await status.edit_text("\n".join(lines))

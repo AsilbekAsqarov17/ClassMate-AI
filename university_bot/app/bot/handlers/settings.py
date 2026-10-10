@@ -15,10 +15,15 @@ from sqlalchemy import select
 from app.database.database import get_session_factory
 from app.database.models.eclass_account import EClassAccount
 from app.database.models.user import User
+from app.database.repositories.allowed_student_id_repository import AllowedStudentIDRepository
 from app.database.repositories.user_repository import UserRepository
 from app.eclass.client import EClassAuthError, EClassUnavailableError
 from app.eclass.web_client import EClassWebClient
-from app.services.validation import INVALID_STUDENT_ID_MSG, normalize_student_id
+from app.services.validation import (
+    INVALID_STUDENT_ID_MSG,
+    NOT_ALLOWED_STUDENT_ID_MSG,
+    normalize_student_id,
+)
 
 router = Router()
 
@@ -147,6 +152,12 @@ async def got_new_student_id(message: Message, state: FSMContext) -> None:
     if new_id is None:
         # stay in waiting_new_student_id — nothing is stored, user may retry
         await message.answer(INVALID_STUDENT_ID_MSG)
+        return
+    async with get_session_factory()() as session:
+        allowed = await AllowedStudentIDRepository(session).is_allowed(new_id)
+    if not allowed:
+        # stay in waiting_new_student_id — nothing is stored, user may retry
+        await message.answer(NOT_ALLOWED_STUDENT_ID_MSG)
         return
     # The password is never stored, so switching to a different Student ID
     # requires a fresh one-time authentication for that ID.

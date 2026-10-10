@@ -45,6 +45,26 @@ class Assignment:
 
 
 @dataclass
+class AttendanceRecord:
+    date: str
+    status: str  # Present / Absent / Late / Excused / ...
+
+
+@dataclass
+class CourseAttendance:
+    course_external_id: str
+    course_name: str
+    # available=True  → E-Class recorded attendance for this course
+    # available=False → no/blank attendance section (professor doesn't track it)
+    available: bool
+    absences: int | None = None
+    late: int | None = None
+    present: int | None = None
+    excused: int | None = None
+    records: list[AttendanceRecord] = field(default_factory=list)
+
+
+@dataclass
 class SyncResult:
     courses: list[Course] = field(default_factory=list)
     lessons: list[Lesson] = field(default_factory=list)

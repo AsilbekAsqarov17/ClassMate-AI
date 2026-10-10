@@ -11,6 +11,7 @@ BTN_SETTINGS = "⚙️ Settings"
 BTN_QUIZZES = "🧪 Quizzes"
 BTN_DEADLINES = "📌 Deadlines"
 BTN_SCORES = "📊 Scores"
+BTN_ATTENDANCE = "🗓 Attendance"
 
 
 def main_menu() -> ReplyKeyboardMarkup:
@@ -20,7 +21,8 @@ def main_menu() -> ReplyKeyboardMarkup:
             [KeyboardButton(text=BTN_WEEK), KeyboardButton(text=BTN_NEXT)],
             [KeyboardButton(text=BTN_ASSIGNMENTS), KeyboardButton(text=BTN_QUIZZES)],
             [KeyboardButton(text=BTN_DEADLINES), KeyboardButton(text=BTN_SCORES)],
-            [KeyboardButton(text=BTN_SYNC), KeyboardButton(text=BTN_SETTINGS)],
+            [KeyboardButton(text=BTN_ATTENDANCE), KeyboardButton(text=BTN_SYNC)],
+            [KeyboardButton(text=BTN_SETTINGS)],
         ],
         resize_keyboard=True,
     )

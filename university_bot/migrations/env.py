@@ -11,6 +11,7 @@ from app.database.models.base import Base
 
 # register every model on Base.metadata
 from app.database.models import (  # noqa: F401
+    allowed_student_id,
     assignment,
     course,
     eclass_account,

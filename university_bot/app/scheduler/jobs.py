@@ -135,8 +135,52 @@ async def sync_all(bot) -> None:
                 log.exception("sync failed: %s", exc)
 
 
+async def send_weekly_attendance_reports(bot) -> None:
+    """Saturday 21:00 (configured timezone): one attendance report per active user."""
+    from datetime import timedelta
+
+    from app.services import attendance_service, notification_service
+
+    now_utc = datetime.now(__import__("datetime").timezone.utc)
+    async with get_session_factory()() as session:
+        result = await session.execute(
+            select(EClassAccount).where(EClassAccount.is_active.is_(True))
+        )
+        for account in result.scalars():
+            u = (await session.execute(select(User).where(User.id == account.user_id))).scalar_one_or_none()
+            if u is None:
+                continue
+            tz = ZoneInfo(u.timezone or get_settings().default_timezone)
+            local = now_utc.astimezone(tz)
+            week_start = (local.date() - timedelta(days=local.weekday())).isoformat()
+            if not await notification_service.due_weekly_attendance(session, u.id, week_start):
+                continue  # already reported this week (restart / re-run safe)
+            rows = await attendance_service.get_persisted(session, u.id)
+            if not rows:
+                continue  # no successful attendance sync ever: nothing to report
+            stale = attendance_service.attendance_is_stale(account, rows)
+            await notification_service.mark_weekly_attendance_sent(session, u.id, week_start)
+            try:
+                await bot.send_message(
+                    u.telegram_id,
+                    attendance_service.build_weekly_report_from_rows(rows, stale, u.timezone),
+                )
+            except Exception as exc:
+                log.warning("weekly attendance send failed: %s", exc)
+
+
 def build_scheduler(bot) -> AsyncIOScheduler:
     scheduler = AsyncIOScheduler()
     scheduler.add_job(check_notifications, "interval", minutes=1, args=[bot], id="notifications")
     scheduler.add_job(sync_all, "interval", minutes=30, args=[bot], id="sync")
+    scheduler.add_job(
+        send_weekly_attendance_reports,
+        "cron",
+        day_of_week="sat",
+        hour=21,
+        minute=0,
+        timezone=ZoneInfo(get_settings().default_timezone),
+        args=[bot],
+        id="weekly_attendance",
+    )
     return scheduler

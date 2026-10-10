@@ -11,7 +11,13 @@ from app.database.models.group import Group
 from app.database.models.notification import NotificationRecord
 from app.database.models.user import User
 from app.eclass.models import Assignment as EAssignment
-from app.services.academic_sync import is_submitted, score_notification_sent, sync_academic_records
+from app.services.academic_sync import (
+    is_submitted,
+    score_notification_sent,
+    score_notification_sent_for_item,
+    score_ref,
+    sync_academic_records,
+)
 from app.services.notification_service import send_score_notifications
 
 NOW = datetime.now(timezone.utc)
@@ -121,8 +127,10 @@ async def test_item_deleted_only_after_successful_notification(db):
     assert rows_ok == []
     assert okbot.sent and "NEW SCORE" in okbot.sent[0][1] and "87/100" in okbot.sent[0][1]
 
-    sent = await score_notification_sent(db, u.id, "hw")
+    # the dedup key is the item's external_id plus the delivered score
+    sent = await score_notification_sent(db, u.id, score_ref("hw", "87"))
     assert sent is True
+    assert await score_notification_sent_for_item(db, u.id, "hw") is True
 
 
 @pytest.mark.asyncio

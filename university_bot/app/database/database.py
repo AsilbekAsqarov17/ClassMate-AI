@@ -48,6 +48,7 @@ async def create_tables() -> None:
     """Create tables directly. Used for dev/Phase 1; Alembic takes over later."""
     from app.database.models import (  # noqa: F401
         assignment,
+        attendance,
         course,
         eclass_account,
         group,

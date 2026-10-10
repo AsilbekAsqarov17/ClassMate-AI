@@ -27,6 +27,7 @@ class SyncOutcome:
         self.new_scores: list[Assignment] = []
         self.session_expired = False
         self.error: str | None = None
+        self.attendance_ok = False
 
 
 async def sync_user(session: AsyncSession, account: EClassAccount) -> SyncOutcome:
@@ -102,7 +103,18 @@ async def sync_user(session: AsyncSession, account: EClassAccount) -> SyncOutcom
         except Exception as exc:
             outcome.error = (outcome.error + "; " if outcome.error else "") + f"timetable: {exc}"
 
-        account.last_sync = datetime.now(__import__("datetime").timezone.utc)
+        # attendance (persisted; failures keep the previously saved data)
+        now_sync = datetime.now(__import__("datetime").timezone.utc)
+        try:
+            from app.services.attendance_service import sync_attendance
+
+            await sync_attendance(session, account, client, now_sync)
+            outcome.attendance_ok = True
+        except Exception as exc:
+            # do NOT overwrite persisted attendance with anything; just report
+            outcome.error = (outcome.error + "; " if outcome.error else "") + f"attendance: {exc}"
+
+        account.last_sync = now_sync
         await session.commit()
         return outcome
     finally:

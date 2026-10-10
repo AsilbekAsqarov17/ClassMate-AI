@@ -12,6 +12,11 @@ INVALID_STUDENT_ID_MSG = (
     "Example:\nu2410037"
 )
 
+NOT_ALLOWED_STUDENT_ID_MSG = (
+    "This Student ID is not registered for ClassMate AI.\n"
+    "Please ask Asqarbek to add your Student ID."
+)
+
 
 def normalize_student_id(text: str | None) -> str | None:
     """Return the normalized (lowercase) Student ID, or None if invalid.
