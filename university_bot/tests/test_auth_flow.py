@@ -19,6 +19,7 @@ import app.bot.handlers.settings as settings_mod
 import app.bot.handlers.start as start_mod
 from app.bot.states.login import LoginStates
 from app.database.models.base import Base
+from app.database.models.allowed_student import AllowedStudent
 from app.database.models.eclass_account import EClassAccount
 from app.database.models.user import User
 from app.eclass.client import EClassAuthError
@@ -195,7 +196,12 @@ class FakeEClassClient:
         return "encrypted-session-blob"
 
 
-async def _factory():
+async def _factory(*, allowed=("u2410037", "u2499999")):
+    """In-memory DB with the registration allowlist pre-seeded.
+
+    Registration now requires the Student ID to be on `allowed_student_ids`,
+    so tests that expect a valid ID to advance must allowlist it first.
+    """
     engine = create_async_engine(
         "sqlite+aiosqlite:///:memory:",
         connect_args={"check_same_thread": False},
@@ -203,7 +209,12 @@ async def _factory():
     )
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-    return engine, async_sessionmaker(engine, expire_on_commit=False)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as s:
+        for sid in allowed:
+            s.add(AllowedStudent(student_id=sid))
+        await s.commit()
+    return engine, factory
 
 
 @pytest.mark.asyncio
@@ -238,6 +249,35 @@ async def test_valid_student_id_normalized_and_advanced(monkeypatch):
 
     assert state.state == LoginStates.waiting_password
     assert state.data["student_id"] == "u2410037"
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_valid_but_unlisted_student_id_is_rejected(monkeypatch):
+    """Well-formed is not enough: the ID must be on the allowlist."""
+    engine, factory = await _factory()  # only u2410037 / u2499999 allowed
+    monkeypatch.setattr(start_mod, "get_session_factory", lambda: factory)
+
+    state = FakeState()
+    msg = FakeMessage("u2410099")  # correct format, not on the list
+    await start_mod.got_student_id(msg, state)
+
+    assert state.state != LoginStates.waiting_password  # did NOT advance
+    assert "student_id" not in state.data
+    assert "not registered for ClassMate AI" in msg.answers[-1].text
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_rejected_id_stores_no_account(monkeypatch):
+    engine, factory = await _factory()
+    monkeypatch.setattr(start_mod, "get_session_factory", lambda: factory)
+
+    state = FakeState()
+    await start_mod.got_student_id(FakeMessage("u2410099"), state)
+
+    async with factory() as s:
+        assert (await s.execute(select(EClassAccount))).scalars().all() == []
     await engine.dispose()
 
 

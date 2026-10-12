@@ -18,6 +18,7 @@ from app.database.models.user import User
 from app.database.repositories.user_repository import UserRepository
 from app.eclass.client import EClassAuthError, EClassUnavailableError
 from app.eclass.web_client import EClassWebClient
+from app.services.allowlist_service import NOT_ALLOWED_MSG, is_allowed
 from app.services.validation import INVALID_STUDENT_ID_MSG, normalize_student_id
 
 router = Router()
@@ -148,6 +149,12 @@ async def got_new_student_id(message: Message, state: FSMContext) -> None:
         # stay in waiting_new_student_id — nothing is stored, user may retry
         await message.answer(INVALID_STUDENT_ID_MSG)
         return
+    # Same allowlist as /start: otherwise switching Student ID would be a way
+    # to register an unauthorized account after the fact.
+    async with get_session_factory()() as session:
+        if not await is_allowed(session, new_id):
+            await message.answer(NOT_ALLOWED_MSG)
+            return
     # The password is never stored, so switching to a different Student ID
     # requires a fresh one-time authentication for that ID.
     await state.update_data(new_student_id=new_id)

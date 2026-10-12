@@ -9,8 +9,9 @@ from zoneinfo import ZoneInfo
 import httpx
 
 from app.config.settings import get_settings
+from app.eclass.attendance import parse_attendance_report
 from app.eclass.client import EClassAuthError, EClassClient, EClassUnavailableError
-from app.eclass.models import Assignment, Course, Lesson
+from app.eclass.models import Assignment, Course, EAttendance, EAttendanceResult, Lesson
 from app.services.crypto import decrypt, encrypt
 
 SESSION_COOKIE_PREFIX = "MoodleSession"
@@ -190,6 +191,66 @@ class EClassWebClient(EClassClient):
             except Exception:
                 pass
         return out
+
+    async def get_attendance(self) -> EAttendanceResult:
+        """Fetch attendance for every course.
+
+        VERIFIED endpoint (eclass.inha.ac.kr, 2026-10-11): attendance is not a
+        Moodle activity but a university local plugin, linked from each course
+        page's "Grade/Attendance" menu as
+
+            /local/ubattendance/my_status.php?id=<courseid>
+
+        and rendered as a `table.attendance_my` with one row per session.
+
+        A course with no recorded sessions yields an empty list; `available`
+        stays True because the page WAS readable. `available=False` is reserved
+        for pages that could not be read at all.
+        """
+        courses = await self.get_courses()
+        if not courses:
+            return EAttendanceResult(
+                available=False,
+                unavailable_reason="E-Class returned no courses for this account",
+            )
+
+        records: list[EAttendance] = []
+        readable = 0
+        failures: list[str] = []
+        empty_courses: dict[str, str] = {}
+
+        for course in courses:
+            try:
+                html = await self._get_text(
+                    f"/local/ubattendance/my_status.php?id={course.external_id}&lang=en"
+                )
+            except (EClassAuthError, EClassUnavailableError):
+                raise  # session/network problem: surface it to the caller
+            except Exception as exc:  # noqa: BLE001
+                failures.append(f"{course.name}: {exc}")
+                continue
+
+            parsed = parse_attendance_report(html, course.external_id, course.name)
+            if parsed is None:
+                failures.append(f"{course.name}: page unreadable")
+                continue
+            readable += 1
+            if not parsed:
+                # Page readable, nothing recorded yet: a confirmed zero.
+                empty_courses[course.external_id] = course.name
+            records.extend(parsed)
+
+        if readable == 0:
+            return EAttendanceResult(
+                available=False,
+                unavailable_reason=(
+                    "E-Class attendance pages could not be read"
+                    + (f" ({'; '.join(failures[:3])})" if failures else "")
+                ),
+            )
+        return EAttendanceResult(
+            available=True, records=records, empty_courses=empty_courses
+        )
 
     async def get_schedule(self, start: date, end: date) -> list[Lesson]:
         # Timetable lives on EduPage, not E-Class. Kept for interface compliance.

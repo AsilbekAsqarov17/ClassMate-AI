@@ -3,6 +3,10 @@ __pycache__/
 
 .env
 
+# single-instance guard (runtime artefacts)
+.classmate_ai.lock
+.classmate_ai.lock.pid
+
 *.db
 *.sqlite
 *.sqlite3

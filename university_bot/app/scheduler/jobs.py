@@ -1,7 +1,8 @@
 """APScheduler-based background jobs (notifications + periodic sync)."""
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -135,8 +136,93 @@ async def sync_all(bot) -> None:
                 log.exception("sync failed: %s", exc)
 
 
+async def send_weekly_attendance_report(bot) -> None:
+    """Saturday 21:00 Asia/Tashkent: Monday-Saturday attendance report.
+
+    Delivery is guarded by the attendance_report_deliveries table, so a retry,
+    a restart, or a second worker cannot send the same week twice. Only a
+    *successful* send is marked delivered, so a Telegram outage is retried on
+    the next run rather than silently skipped.
+    """
+    from app.database.models.attendance_report_delivery import AttendanceReportDelivery
+    from app.services import attendance_service as svc
+
+    monday, saturday = svc.week_bounds()
+    log.info("weekly attendance report for week starting %s (%s..%s)", monday, monday, saturday)
+
+    async with get_session_factory()() as session:
+        accounts = (
+            await session.execute(
+                select(EClassAccount).where(EClassAccount.is_active.is_(True))
+            )
+        ).scalars().all()
+
+        for account in accounts:
+            uid = account.user_id
+            try:
+                user = (
+                    await session.execute(select(User).where(User.id == uid))
+                ).scalar_one_or_none()
+                if user is None:
+                    continue
+
+                already = (
+                    await session.execute(
+                        select(AttendanceReportDelivery).where(
+                            AttendanceReportDelivery.user_id == uid,
+                            AttendanceReportDelivery.week_start == monday,
+                            AttendanceReportDelivery.status == "sent",
+                        )
+                    )
+                ).scalar_one_or_none()
+                if already is not None:
+                    continue  # already delivered this week
+
+                text = await svc.build_weekly_report(session, uid)
+                await bot.send_message(user.telegram_id, text, parse_mode="HTML")
+            except Exception as exc:  # noqa: BLE001 - one bad account must not stop the rest
+                log.warning("weekly attendance report failed for account %s: %s", uid, exc)
+                continue
+
+            # Only record success after Telegram accepted the message.
+            delivered = (
+                await session.execute(
+                    select(AttendanceReportDelivery).where(
+                        AttendanceReportDelivery.user_id == uid,
+                        AttendanceReportDelivery.week_start == monday,
+                    )
+                )
+            ).scalar_one_or_none()
+            if delivered is None:
+                delivered = AttendanceReportDelivery(
+                    user_id=uid, week_start=monday, status="sent",
+                    delivered_at=datetime.now(timezone.utc),
+                )
+                session.add(delivered)
+            else:
+                delivered.status = "sent"
+                delivered.delivered_at = datetime.now(timezone.utc)
+            await session.commit()
+
+
 def build_scheduler(bot) -> AsyncIOScheduler:
     scheduler = AsyncIOScheduler()
     scheduler.add_job(check_notifications, "interval", minutes=1, args=[bot], id="notifications")
     scheduler.add_job(sync_all, "interval", minutes=30, args=[bot], id="sync")
+    scheduler.add_job(
+        send_weekly_attendance_report,
+        "cron",
+        day_of_week="sat",
+        hour=21,
+        minute=0,
+        args=[bot],
+        id="weekly_attendance_report",
+        # Explicit, so the schedule is the school's local time and not the
+        # server's. misfire_grace_time keeps a short outage from producing a
+        # backlog of old reports.
+        timezone=ZoneInfo(get_settings().default_timezone),
+        misfire_grace_time=3600,
+        coalesce=True,
+        max_instances=1,
+    )
     return scheduler

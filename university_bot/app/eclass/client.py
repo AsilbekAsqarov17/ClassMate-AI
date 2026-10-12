@@ -3,7 +3,7 @@
 from abc import ABC, abstractmethod
 from datetime import date
 
-from app.eclass.models import Assignment, Course, Lesson
+from app.eclass.models import Assignment, Course, EAttendanceResult, Lesson
 
 
 class EClassError(Exception):
@@ -45,6 +45,15 @@ class EClassClient(ABC):
     @abstractmethod
     async def get_quizzes(self) -> list[Assignment]:
         ...
+
+    @abstractmethod
+    async def get_attendance(self) -> EAttendanceResult:
+        """Fetch attendance records for the signed-in student.
+
+        Implementations MUST return ``available=False`` with a reason when the
+        installation exposes no attendance data, rather than reporting an empty
+        list that callers would read as "no absences".
+        """
 
     @abstractmethod
     def session_data(self) -> str:

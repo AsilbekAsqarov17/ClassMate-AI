@@ -11,6 +11,7 @@ from app.database.models.eclass_account import EClassAccount
 from app.database.repositories.user_repository import UserRepository
 from app.eclass.client import EClassAuthError, EClassUnavailableError
 from app.eclass.web_client import EClassWebClient
+from app.services.allowlist_service import NOT_ALLOWED_MSG, is_allowed
 from app.services.validation import INVALID_STUDENT_ID_MSG, normalize_student_id
 
 router = Router()
@@ -54,6 +55,12 @@ async def got_student_id(message: Message, state: FSMContext) -> None:
         # stay in waiting_student_id — nothing is stored, user may retry
         await message.answer(INVALID_STUDENT_ID_MSG)
         return
+    # Well-formed is not the same as permitted: the bot is scoped to one study
+    # group, so the ID must also be on the approved list.
+    async with get_session_factory()() as session:
+        if not await is_allowed(session, student_id):
+            await message.answer(NOT_ALLOWED_MSG)
+            return
     await state.update_data(student_id=student_id)
     await state.set_state(LoginStates.waiting_password)
     await message.answer(
